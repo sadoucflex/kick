@@ -28,6 +28,9 @@
     text-overflow:ellipsis; white-space:nowrap; }
   .tool .av { background:transparent; border:.45vh dashed var(--g); color:var(--g); }
   .tool .name { color:var(--g); }
+  .chan .av { background:#ffcc00; font-size:3.6vh; }
+  .chan .name { color:#ffcc00; }
+  .chan:focus, .chan:hover { border-color:#ffcc00; }
   body.edit .fav { border-color:#ff5a5a55; }
   body.edit .fav::after { content:"✕"; position:absolute; top:1.2vh; right:1.6vh;
     color:#ff5a5a; font-size:3.4vh; font-weight:900; }
@@ -194,6 +197,7 @@ function render(focusIndex) {
       if (editMode) { removeFav(name); } else { openLive(name); }
     }, color(name));
   });
+  if (!editMode) tile("chan", "TV", "Cartoon TV", function () { location.href = "cartoons/"; });
   if (!editMode) tile("tool", "+", "Ajouter", openDlg);
   if (favs.length) tile("tool", editMode ? "✓" : "✎", editMode ? "Terminé" : "Supprimer", toggleEdit);
   if (!favs.length) {
@@ -232,7 +236,7 @@ function removeFav(name) {
 }
 function toggleEdit() {
   editMode = !editMode;
-  render(editMode ? 0 : favs.length);
+  render(editMode ? 0 : favs.length + 2);
 }
 function openDlg() {
   dlg.classList.add("on");
@@ -241,7 +245,7 @@ function openDlg() {
 }
 function closeDlg() {
   dlg.classList.remove("on");
-  focusTile(favs.length);
+  focusTile(favs.length + 1);
 }
 function submitDlg() {
   var name = clean(inp.value);
