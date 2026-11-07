@@ -42,11 +42,21 @@
   #player.on { display:block; }
   #load { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
     color:var(--mut); font-size:3.2vh; }
-  #frameBox, #frameBox iframe { position:absolute; inset:0; width:100%; height:100%; border:0; }
-  #back { position:absolute; top:3vh; left:2.5vw; z-index:2; background:rgba(0,0,0,.65);
-    color:#fff; border:.4vh solid var(--g); border-radius:1.2vh; font-size:2.6vh;
-    padding:1.2vh 2vw; cursor:pointer; transition:opacity .4s; }
-  #back.hide { opacity:0; pointer-events:none; }
+  #frameBox { position:absolute; inset:0; overflow:hidden; }
+  /* En mode "sans bandeaux", l'iframe est plus haute que l'écran : la vidéo reste
+     centrée et remplit l'écran, les bandeaux Kick (haut et bas) tombent hors champ. */
+  #frameBox iframe { position:absolute; left:0; top:0; width:100%; height:100%; border:0; }
+  /* Calque transparent au-dessus du lecteur : le curseur de la TV ne survole jamais
+     le lecteur Kick (ses boutons restent cachés) et la télécommande reste sur l'appli. */
+  #shield { position:absolute; inset:0; z-index:1; background:transparent; }
+  #toast { position:absolute; left:50%; bottom:6vh; transform:translateX(-50%); z-index:3;
+    background:rgba(0,0,0,.75); color:#fff; font-size:2.6vh; padding:1.4vh 2.4vw;
+    border-radius:1.2vh; white-space:nowrap; transition:opacity .4s; pointer-events:none; }
+  #toast.hide { opacity:0; }
+  #bar { position:absolute; top:3vh; left:2.5vw; z-index:2; display:flex; gap:1.2vw; transition:opacity .4s; }
+  #bar.hide { opacity:0; pointer-events:none; }
+  .pbtn { background:rgba(0,0,0,.65); color:#fff; border:.4vh solid var(--g); border-radius:1.2vh;
+    font-size:2.6vh; padding:1.2vh 2vw; cursor:pointer; }
 
   /* Fenêtre d'ajout */
   #dlg { position:fixed; inset:0; background:rgba(0,0,0,.8); display:none; z-index:20;
@@ -78,7 +88,12 @@
 <div id="player">
   <div id="load">Chargement du live…</div>
   <div id="frameBox"></div>
-  <button id="back" class="hide">◀ Retour</button>
+  <div id="shield"></div>
+  <div id="bar" class="hide">
+    <button class="pbtn" id="back" tabindex="-1">◀ Retour</button>
+    <button class="pbtn" id="modeBtn" tabindex="-1">⇅ Affichage</button>
+  </div>
+  <div id="toast" class="hide"></div>
 </div>
 
 <div id="dlg">
@@ -237,11 +252,54 @@ function submitDlg() {
 }
 
 /* ---------- lecteur ---------- */
+var MODE_STORE = "kicktv_affichage";
+var mode = "propre";            // "propre" = sans bandeaux Kick, "normal" = lecteur tel quel
+try { mode = localStorage.getItem(MODE_STORE) || "propre"; } catch (e) {}
+var toast = document.getElementById("toast");
+var shield = document.getElementById("shield");
+var toastTimer = null;
+var bar = document.getElementById("bar");
+var modeBtn = document.getElementById("modeBtn");
+var pendingToggle = null;
+var lastToggle = 0;
+
 function showBack() {
-  backBtn.classList.remove("hide");
+  bar.classList.remove("hide");
   clearTimeout(hideTimer);
-  hideTimer = setTimeout(function () { backBtn.classList.add("hide"); }, 5000);
+  hideTimer = setTimeout(function () { bar.classList.add("hide"); }, 5000);
 }
+function showToast(text, ms) {
+  toast.textContent = text;
+  toast.classList.remove("hide");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { toast.classList.add("hide"); }, ms || 2500);
+}
+function layoutFrame() {
+  var f = frameBox.querySelector("iframe");
+  if (!f) return;
+  var W = window.innerWidth, H = window.innerHeight;
+  if (mode === "propre") {
+    var videoH = W * 9 / 16;            // hauteur de la vidéo 16:9 quand elle remplit la largeur
+    var band = videoH * 0.3;            // marge noire en haut et en bas, où Kick met ses bandeaux
+    f.style.top = Math.round((H - videoH) / 2 - band) + "px";
+    f.style.height = Math.round(videoH + 2 * band) + "px";
+  } else {
+    f.style.top = "0px";
+    f.style.height = H + "px";
+  }
+}
+function toggleMode() {
+  var now = Date.now();
+  if (now - lastToggle < 600) return;   // évite un double changement (touche OK + clic du curseur)
+  lastToggle = now;
+  mode = (mode === "propre") ? "normal" : "propre";
+  try { localStorage.setItem(MODE_STORE, mode); } catch (e) {}
+  layoutFrame();
+  showToast(mode === "propre" ? "Affichage : plein écran sans bandeaux" : "Affichage : normal (avec les infos Kick)");
+}
+window.addEventListener("resize", layoutFrame);
+shield.addEventListener("click", function () { showBack(); showToast("OK : changer l'affichage · Retour : quitter"); });
+
 function openLive(name) {
   var f = document.createElement("iframe");
   f.src = "https://player.kick.com/" + encodeURIComponent(name) + "?autoplay=true&muted=false";
@@ -253,10 +311,13 @@ function openLive(name) {
   frameBox.appendChild(f);
   player.classList.add("on");
   liveOpen = true;
+  layoutFrame();
   try { history.pushState({ live: name }, "", "#live"); } catch (e) {}
   showBack();
+  showToast("OK : changer l'affichage · Retour : quitter", 4000);
   // garder les touches de la télécommande sur l'appli plutôt que dans le lecteur
-  f.addEventListener("load", function () { try { window.focus(); backBtn.focus(); } catch (e) {} });
+  try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch (e) {}
+  f.addEventListener("load", function () { try { window.focus(); } catch (e) {} });
 }
 function closeLive(fromHistory) {
   if (!liveOpen) return;
@@ -267,7 +328,8 @@ function closeLive(fromHistory) {
   focusTile(lastIndex);
 }
 window.addEventListener("popstate", function () { if (liveOpen) closeLive(true); });
-backBtn.addEventListener("click", function () { closeLive(false); });
+backBtn.addEventListener("click", function () { clearTimeout(pendingToggle); closeLive(false); });
+modeBtn.addEventListener("click", function () { clearTimeout(pendingToggle); toggleMode(); showBack(); });
 player.addEventListener("mousemove", showBack);
 
 /* ---------- télécommande ---------- */
@@ -294,7 +356,14 @@ document.addEventListener("keydown", function (e) {
 
   if (liveOpen) {
     if (BACK_KEYS[k]) { e.preventDefault(); closeLive(false); }
-    else { showBack(); if (k === 13 && document.activeElement === backBtn) { e.preventDefault(); closeLive(false); } }
+    else if (k === 13 || k === 38 || k === 40) {
+      e.preventDefault();
+      showBack();
+      // léger délai : si la touche OK correspond au clic du curseur sur un bouton, le bouton gagne
+      clearTimeout(pendingToggle);
+      pendingToggle = setTimeout(function () { if (liveOpen) toggleMode(); }, 150);
+    }
+    else { showBack(); }
     return;
   }
 
