@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kick TV</title>
+<style>
+  :root { --g:#53fc18; --bg:#0b0e0f; --card:#1a1d21; --txt:#fff; --mut:#9aa0a6; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html, body { height:100%; background:var(--bg); color:var(--txt);
+    font-family: Arial, Helvetica, sans-serif; overflow:hidden; }
+
+  header { display:flex; align-items:center; justify-content:space-between; padding:4vh 5vw 2vh; }
+  .logo { font-size:5vh; font-weight:900; letter-spacing:.04em; }
+  .logo b { color:var(--g); }
+  .hint { color:var(--mut); font-size:2.3vh; }
+
+  #grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:3.5vh 2.2vw;
+    padding:3vh 5vw 6vh; height:80vh; overflow-y:auto; align-content:start; }
+  .tile { position:relative; background:var(--card); border-radius:2vh; height:24vh;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    cursor:pointer; border:.6vh solid transparent; outline:none;
+    transition:transform .12s, border-color .12s, background .12s; }
+  .tile:focus, .tile:hover { border-color:var(--g); transform:scale(1.06); background:#22262b; }
+  .av { width:10vh; height:10vh; border-radius:50%; display:flex; align-items:center;
+    justify-content:center; font-size:4.6vh; font-weight:900; color:#000; margin-bottom:1.8vh; }
+  .name { font-size:3vh; font-weight:700; max-width:90%; overflow:hidden;
+    text-overflow:ellipsis; white-space:nowrap; }
+  .tool .av { background:transparent; border:.45vh dashed var(--g); color:var(--g); }
+  .tool .name { color:var(--g); }
+  body.edit .fav { border-color:#ff5a5a55; }
+  body.edit .fav::after { content:"✕"; position:absolute; top:1.2vh; right:1.6vh;
+    color:#ff5a5a; font-size:3.4vh; font-weight:900; }
+  body.edit .fav:focus { border-color:#ff5a5a; background:#3a1d1f; }
+  #empty { grid-column:2 / span 3; align-self:center; color:var(--mut); font-size:3vh; padding-left:2vw; }
+  #saveLink { display:none; padding:0 5vw; color:var(--mut); font-size:2vh; word-break:break-all;
+    position:fixed; bottom:2vh; left:0; right:0; }
+  body.edit #saveLink { display:block; }
+
+  /* Lecteur */
+  #player { position:fixed; inset:0; background:#000; display:none; z-index:10; }
+  #player.on { display:block; }
+  #load { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    color:var(--mut); font-size:3.2vh; }
+  #frameBox, #frameBox iframe { position:absolute; inset:0; width:100%; height:100%; border:0; }
+  #back { position:absolute; top:3vh; left:2.5vw; z-index:2; background:rgba(0,0,0,.65);
+    color:#fff; border:.4vh solid var(--g); border-radius:1.2vh; font-size:2.6vh;
+    padding:1.2vh 2vw; cursor:pointer; transition:opacity .4s; }
+  #back.hide { opacity:0; pointer-events:none; }
+
+  /* Fenêtre d'ajout */
+  #dlg { position:fixed; inset:0; background:rgba(0,0,0,.8); display:none; z-index:20;
+    align-items:center; justify-content:center; }
+  #dlg.on { display:flex; }
+  .box { background:var(--card); border-radius:2vh; padding:5vh 4vw; width:60vw; }
+  .box h2 { font-size:3.6vh; margin-bottom:1vh; }
+  .box p { color:var(--mut); font-size:2.3vh; margin-bottom:3vh; }
+  #inp { width:100%; font-size:3.4vh; padding:2vh 1.5vw; border-radius:1.2vh;
+    border:.5vh solid #333; background:#0f1113; color:#fff; outline:none; }
+  #inp:focus { border-color:var(--g); }
+  .btns { display:flex; gap:2vw; margin-top:3.5vh; }
+  .btn { font-size:3vh; padding:1.6vh 3vw; border-radius:1.2vh; border:.5vh solid transparent;
+    background:#2a2e33; color:#fff; cursor:pointer; outline:none; }
+  .btn.ok { background:var(--g); color:#000; font-weight:900; }
+  .btn:focus, .btn:hover { border-color:#fff; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><b>KICK</b> TV</div>
+  <div class="hint" id="hint">Flèches pour choisir · OK pour lancer · Retour pour revenir</div>
+</header>
+
+<div id="grid"></div>
+<div id="saveLink"></div>
+
+<div id="player">
+  <div id="load">Chargement du live…</div>
+  <div id="frameBox"></div>
+  <button id="back" class="hide">◀ Retour</button>
+</div>
+
+<div id="dlg">
+  <div class="box">
+    <h2>Ajouter un streamer</h2>
+    <p>Tape son pseudo Kick (ce qu'il y a après kick.com/)</p>
+    <input id="inp" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="ex : pseudo_du_streamer">
+    <div class="btns">
+      <button class="btn ok" id="okBtn">Ajouter</button>
+      <button class="btn" id="noBtn">Annuler</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   TES STREAMERS PAR DÉFAUT : mets leurs pseudos Kick ici.
+   Exemple : var DEFAUT = ["pseudo1", "pseudo2", "pseudo3"];
+   ============================================================ */
+var DEFAUT = ["loumani_officiel"];
+
+var COLS = 4;
+var STORE = "kicktv_favoris";
+var grid = document.getElementById("grid");
+var player = document.getElementById("player");
+var frameBox = document.getElementById("frameBox");
+var backBtn = document.getElementById("back");
+var dlg = document.getElementById("dlg");
+var inp = document.getElementById("inp");
+var okBtn = document.getElementById("okBtn");
+var noBtn = document.getElementById("noBtn");
+var saveLink = document.getElementById("saveLink");
+
+var favs = [];
+var editMode = false;
+var liveOpen = false;
+var lastIndex = 0;
+var hideTimer = null;
+
+/* ---------- favoris ---------- */
+function clean(s) {
+  s = String(s || "").trim().toLowerCase();
+  s = s.replace(/^https?:\/\//, "").replace(/^(www\.)?kick\.com\//, "").replace(/^player\.kick\.com\//, "");
+  s = s.split(/[\/?#\s]/)[0];
+  return s.replace(/[^a-z0-9_\-]/g, "");
+}
+function param(name) {
+  var m = new RegExp("[?&]" + name + "=([^&#]*)").exec(location.search);
+  return m ? decodeURIComponent(m[1].replace(/\+/g, " ")) : "";
+}
+function loadFavs() {
+  var list = null;
+  try { var v = JSON.parse(localStorage.getItem(STORE)); if (v && v.length !== undefined) list = v; } catch (e) {}
+  if (!list) list = DEFAUT.slice();
+  var fromUrl = param("s");
+  if (fromUrl) {
+    fromUrl.split(",").forEach(function (x) { x = clean(x); if (x && list.indexOf(x) < 0) list.push(x); });
+  }
+  favs = [];
+  list.forEach(function (x) { x = clean(x); if (x && favs.indexOf(x) < 0) favs.push(x); });
+}
+function saveFavs() {
+  try { localStorage.setItem(STORE, JSON.stringify(favs)); } catch (e) {}
+  var base = location.href.split("?")[0].split("#")[0];
+  saveLink.textContent = favs.length
+    ? "Lien de secours avec tes favoris (à mettre en favori si la TV les oublie) : " + base + "?s=" + favs.join(",")
+    : "";
+}
+
+/* ---------- affichage ---------- */
+function color(name) {
+  var h = 0;
+  for (var i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
+  return "hsl(" + h + ",75%,60%)";
+}
+function tile(cls, avatarTxt, label, onPick, avatarColor) {
+  var t = document.createElement("div");
+  t.className = "tile " + cls;
+  t.tabIndex = 0;
+  var a = document.createElement("div");
+  a.className = "av";
+  a.textContent = avatarTxt;
+  if (avatarColor) a.style.background = avatarColor;
+  var n = document.createElement("div");
+  n.className = "name";
+  n.textContent = label;
+  t.appendChild(a); t.appendChild(n);
+  t.addEventListener("click", onPick);
+  grid.appendChild(t);
+  return t;
+}
+function render(focusIndex) {
+  grid.innerHTML = "";
+  document.body.classList.toggle("edit", editMode);
+  favs.forEach(function (name) {
+    tile("fav", name.charAt(0).toUpperCase(), name, function () {
+      if (editMode) { removeFav(name); } else { openLive(name); }
+    }, color(name));
+  });
+  if (!editMode) tile("tool", "+", "Ajouter", openDlg);
+  if (favs.length) tile("tool", editMode ? "✓" : "✎", editMode ? "Terminé" : "Supprimer", toggleEdit);
+  if (!favs.length) {
+    var e = document.createElement("div");
+    e.id = "empty";
+    e.textContent = "Ajoute ton premier streamer avec « + »";
+    grid.appendChild(e);
+  }
+  document.getElementById("hint").textContent = editMode
+    ? "Mode suppression : OK sur un streamer pour le retirer"
+    : "Flèches pour choisir · OK pour lancer · Retour pour revenir";
+  focusTile(focusIndex || 0);
+}
+function tiles() { return grid.querySelectorAll(".tile"); }
+function focusTile(i) {
+  var t = tiles();
+  if (!t.length) return;
+  i = Math.max(0, Math.min(t.length - 1, i));
+  lastIndex = i;
+  t[i].focus();
+  if (t[i].scrollIntoView) t[i].scrollIntoView({ block: "nearest" });
+}
+function currentIndex() {
+  var t = tiles();
+  for (var i = 0; i < t.length; i++) if (t[i] === document.activeElement) return i;
+  return lastIndex;
+}
+
+/* ---------- actions ---------- */
+function removeFav(name) {
+  var i = favs.indexOf(name);
+  if (i >= 0) favs.splice(i, 1);
+  saveFavs();
+  if (!favs.length) editMode = false;
+  render(Math.max(0, i - 1));
+}
+function toggleEdit() {
+  editMode = !editMode;
+  render(editMode ? 0 : favs.length);
+}
+function openDlg() {
+  dlg.classList.add("on");
+  inp.value = "";
+  setTimeout(function () { inp.focus(); }, 50);
+}
+function closeDlg() {
+  dlg.classList.remove("on");
+  focusTile(favs.length);
+}
+function submitDlg() {
+  var name = clean(inp.value);
+  if (!name) { inp.focus(); return; }
+  if (favs.indexOf(name) < 0) favs.push(name);
+  saveFavs();
+  dlg.classList.remove("on");
+  render(favs.indexOf(name));
+}
+
+/* ---------- lecteur ---------- */
+function showBack() {
+  backBtn.classList.remove("hide");
+  clearTimeout(hideTimer);
+  hideTimer = setTimeout(function () { backBtn.classList.add("hide"); }, 5000);
+}
+function openLive(name) {
+  var f = document.createElement("iframe");
+  f.src = "https://player.kick.com/" + encodeURIComponent(name) + "?autoplay=true&muted=false";
+  f.setAttribute("allow", "autoplay; fullscreen; encrypted-media; picture-in-picture");
+  f.setAttribute("allowfullscreen", "true");
+  f.setAttribute("scrolling", "no");
+  f.setAttribute("tabindex", "-1");
+  frameBox.innerHTML = "";
+  frameBox.appendChild(f);
+  player.classList.add("on");
+  liveOpen = true;
+  try { history.pushState({ live: name }, "", "#live"); } catch (e) {}
+  showBack();
+  // garder les touches de la télécommande sur l'appli plutôt que dans le lecteur
+  f.addEventListener("load", function () { try { window.focus(); backBtn.focus(); } catch (e) {} });
+}
+function closeLive(fromHistory) {
+  if (!liveOpen) return;
+  liveOpen = false;
+  frameBox.innerHTML = "";
+  player.classList.remove("on");
+  if (!fromHistory && location.hash === "#live") { try { history.back(); } catch (e) {} }
+  focusTile(lastIndex);
+}
+window.addEventListener("popstate", function () { if (liveOpen) closeLive(true); });
+backBtn.addEventListener("click", function () { closeLive(false); });
+player.addEventListener("mousemove", showBack);
+
+/* ---------- télécommande ---------- */
+var BACK_KEYS = { 8: 1, 27: 1, 461: 1, 10009: 1, 166: 1 };
+document.addEventListener("keydown", function (e) {
+  var k = e.keyCode || e.which;
+
+  if (dlg.classList.contains("on")) {
+    var inInput = document.activeElement === inp;
+    if (k === 13) {
+      e.preventDefault();
+      if (inInput || document.activeElement === okBtn) submitDlg(); else closeDlg();
+      return;
+    }
+    if (k === 27 || k === 461 || k === 10009 || k === 166 || (k === 8 && !inInput)) { e.preventDefault(); closeDlg(); return; }
+    if (k === 40 && inInput) { e.preventDefault(); okBtn.focus(); return; }
+    if (k === 38 && !inInput) { e.preventDefault(); inp.focus(); return; }
+    if ((k === 39 || k === 37) && !inInput) {
+      e.preventDefault();
+      (document.activeElement === okBtn ? noBtn : okBtn).focus();
+    }
+    return;
+  }
+
+  if (liveOpen) {
+    if (BACK_KEYS[k]) { e.preventDefault(); closeLive(false); }
+    else { showBack(); if (k === 13 && document.activeElement === backBtn) { e.preventDefault(); closeLive(false); } }
+    return;
+  }
+
+  var i = currentIndex();
+  if (k === 37) { e.preventDefault(); focusTile(i - 1); }
+  else if (k === 39) { e.preventDefault(); focusTile(i + 1); }
+  else if (k === 38) { e.preventDefault(); focusTile(i - COLS); }
+  else if (k === 40) { e.preventDefault(); focusTile(i + COLS); }
+  else if (k === 13) { e.preventDefault(); var t = tiles()[i]; if (t) t.click(); }
+  else if (BACK_KEYS[k] && editMode) { e.preventDefault(); toggleEdit(); }
+});
+okBtn.addEventListener("click", submitDlg);
+noBtn.addEventListener("click", closeDlg);
+
+/* ---------- démarrage ---------- */
+loadFavs();
+saveFavs();
+render(0);
+// lien direct vers un live : ...?live=pseudo
+var direct = clean(param("live"));
+if (direct) openLive(direct);
+</script>
+</body>
+</html>
