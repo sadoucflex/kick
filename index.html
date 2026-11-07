@@ -91,6 +91,7 @@
   <div id="shield"></div>
   <div id="bar" class="hide">
     <button class="pbtn" id="back" tabindex="-1">◀ Retour</button>
+    <button class="pbtn" id="refreshBtn" tabindex="-1">⟳ Actualiser</button>
     <button class="pbtn" id="modeBtn" tabindex="-1">⇅ Affichage</button>
   </div>
   <div id="toast" class="hide"></div>
@@ -298,26 +299,42 @@ function toggleMode() {
   showToast(mode === "propre" ? "Affichage : plein écran sans bandeaux" : "Affichage : normal (avec les infos Kick)");
 }
 window.addEventListener("resize", layoutFrame);
-shield.addEventListener("click", function () { showBack(); showToast("OK : changer l'affichage · Retour : quitter"); });
+var HELP = "OK : affichage · ◀ ▶ : actualiser · Retour : quitter";
+shield.addEventListener("click", function () { showBack(); showToast(HELP); });
 
-function openLive(name) {
+var currentLive = "";
+var lastRefresh = 0;
+function loadFrame(name) {
   var f = document.createElement("iframe");
-  f.src = "https://player.kick.com/" + encodeURIComponent(name) + "?autoplay=true&muted=false";
+  // le paramètre "t" force le lecteur à repartir de zéro à chaque actualisation
+  f.src = "https://player.kick.com/" + encodeURIComponent(name) + "?autoplay=true&muted=false&t=" + Date.now();
   f.setAttribute("allow", "autoplay; fullscreen; encrypted-media; picture-in-picture");
   f.setAttribute("allowfullscreen", "true");
   f.setAttribute("scrolling", "no");
   f.setAttribute("tabindex", "-1");
   frameBox.innerHTML = "";
   frameBox.appendChild(f);
-  player.classList.add("on");
-  liveOpen = true;
   layoutFrame();
-  try { history.pushState({ live: name }, "", "#live"); } catch (e) {}
-  showBack();
-  showToast("OK : changer l'affichage · Retour : quitter", 4000);
   // garder les touches de la télécommande sur l'appli plutôt que dans le lecteur
   try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch (e) {}
   f.addEventListener("load", function () { try { window.focus(); } catch (e) {} });
+}
+function openLive(name) {
+  currentLive = name;
+  player.classList.add("on");
+  liveOpen = true;
+  loadFrame(name);
+  try { history.pushState({ live: name }, "", "#live"); } catch (e) {}
+  showBack();
+  showToast(HELP, 4000);
+}
+function refreshLive() {
+  if (!liveOpen || !currentLive) return;
+  var now = Date.now();
+  if (now - lastRefresh < 1500) return;  // évite plusieurs rechargements d'affilée
+  lastRefresh = now;
+  loadFrame(currentLive);
+  showToast("Actualisation du live…");
 }
 function closeLive(fromHistory) {
   if (!liveOpen) return;
@@ -330,6 +347,7 @@ function closeLive(fromHistory) {
 window.addEventListener("popstate", function () { if (liveOpen) closeLive(true); });
 backBtn.addEventListener("click", function () { clearTimeout(pendingToggle); closeLive(false); });
 modeBtn.addEventListener("click", function () { clearTimeout(pendingToggle); toggleMode(); showBack(); });
+document.getElementById("refreshBtn").addEventListener("click", function () { clearTimeout(pendingToggle); refreshLive(); showBack(); });
 player.addEventListener("mousemove", showBack);
 
 /* ---------- télécommande ---------- */
@@ -363,6 +381,8 @@ document.addEventListener("keydown", function (e) {
       clearTimeout(pendingToggle);
       pendingToggle = setTimeout(function () { if (liveOpen) toggleMode(); }, 150);
     }
+    // ◀ ▶ ou une touche de couleur (rouge, vert, jaune, bleu) : actualiser le live
+    else if (k === 37 || k === 39 || (k >= 403 && k <= 406)) { e.preventDefault(); showBack(); refreshLive(); }
     else { showBack(); }
     return;
   }
