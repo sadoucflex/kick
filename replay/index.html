@@ -45,6 +45,34 @@
     background:rgba(0,0,0,.8); color:#fff; font-size:2.6vh; padding:1.4vh 2.4vw; border-radius:1.2vh;
     white-space:nowrap; transition:opacity .4s; pointer-events:none; }
   #toast.hide { opacity:0; }
+  /* Menu affiché en pause */
+  #pmenu { display:none; gap:1.2vw; margin-top:2vh; }
+  body.paused #pmenu { display:flex; }
+  .mbtn { font-size:2.6vh; padding:1.2vh 1.8vw; border-radius:1.2vh; background:#2a2e33; color:#fff;
+    border:.4vh solid transparent; cursor:pointer; }
+  .mbtn.sel { border-color:var(--g); background:#1f3a14; }
+
+  /* Fenêtre "Aller à" */
+  #goto { position:fixed; inset:0; z-index:6; background:rgba(0,0,0,.75); display:none;
+    align-items:center; justify-content:center; }
+  #goto.on { display:flex; }
+  .gbox { background:#15181b; border:.4vh solid var(--g); border-radius:2vh; padding:4vh 4vw; text-align:center; }
+  .gbox h2 { font-size:3.6vh; margin-bottom:.8vh; }
+  .gbox .gsub { color:var(--mut); font-size:2.2vh; margin-bottom:3vh; }
+  .fields { display:flex; align-items:center; justify-content:center; gap:1vw; }
+  .field { display:flex; flex-direction:column; align-items:center; }
+  .arr { font-size:3vh; color:var(--mut); cursor:pointer; padding:.6vh 1.5vw; user-select:none; }
+  .num { font-size:9vh; font-weight:900; min-width:12vw; padding:1vh 1vw; border-radius:1.2vh;
+    border:.5vh solid #333; background:#0b0d0f; font-variant-numeric:tabular-nums; }
+  .field.sel .num { border-color:var(--g); color:var(--g); }
+  .field.sel .arr { color:#fff; }
+  .unit { color:var(--mut); font-size:2vh; margin-top:.4vh; }
+  .colon { font-size:8vh; font-weight:900; color:var(--mut); margin-bottom:5vh; }
+  .ghelp { color:var(--mut); font-size:2.1vh; margin-top:3vh; line-height:1.5; }
+  .gbtns { display:flex; gap:1.5vw; justify-content:center; margin-top:2.5vh; }
+  .gbtn { font-size:2.6vh; padding:1.2vh 2.4vw; border-radius:1.2vh; border:none; cursor:pointer; background:#2a2e33; color:#fff; }
+  .gbtn.ok { background:var(--g); color:#000; font-weight:900; }
+
   #pauseIcon { position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); z-index:2; font-size:14vh;
     color:#fff; text-shadow:0 0 2vh #000; display:none; pointer-events:none; }
 </style>
@@ -65,7 +93,28 @@
   <div class="sub" id="iSub"></div>
   <div id="track"><div id="fill"></div><div id="target"></div></div>
   <div id="times"><span id="tCur"><b>0:00</b></span><span id="tDur">0:00</span></div>
-  <div id="help">OK : pause · ◀ ▶ : 30 s · ▲ ▼ : 5 min · Retour : Kick TV</div>
+  <div id="help">OK : pause · ◀ ▶ : 30 s · ▲ ▼ : 5 min · Chiffres ou touche verte : aller à un moment précis · Retour : Kick TV</div>
+  <div id="pmenu">
+    <div class="mbtn sel" id="mResume">▶ Reprendre</div>
+    <div class="mbtn" id="mGoto">⏱ Aller à un moment précis</div>
+  </div>
+</div>
+
+<div id="goto">
+  <div class="gbox">
+    <h2>Aller à…</h2>
+    <div class="gsub" id="gSub">Durée totale : 0:00</div>
+    <div class="fields">
+      <div class="field" data-i="0"><div class="arr" data-d="1">▲</div><div class="num" id="g0">0</div><div class="arr" data-d="-1">▼</div><div class="unit">heures</div></div>
+      <div class="colon">:</div>
+      <div class="field" data-i="1"><div class="arr" data-d="1">▲</div><div class="num" id="g1">00</div><div class="arr" data-d="-1">▼</div><div class="unit">minutes</div></div>
+      <div class="colon">:</div>
+      <div class="field" data-i="2"><div class="arr" data-d="1">▲</div><div class="num" id="g2">00</div><div class="arr" data-d="-1">▼</div><div class="unit">secondes</div></div>
+    </div>
+    <div class="ghelp">▲ ▼ : changer · ◀ ▶ : heures / minutes / secondes · OK : y aller · Retour : annuler<br>
+      Avec les chiffres : tape 1 2 3 0 0 pour aller à 1:23:00</div>
+    <div class="gbtns"><button class="gbtn ok" id="gOk" tabindex="-1">Y aller</button><button class="gbtn" id="gNo" tabindex="-1">Annuler</button></div>
+  </div>
 </div>
 
 <div id="btns" class="hide">
@@ -75,6 +124,7 @@
   <button class="pbtn" id="bPlay" tabindex="-1">❚❚ / ▶</button>
   <button class="pbtn" id="bFwd" tabindex="-1">30 s ›</button>
   <button class="pbtn" id="bFwd5" tabindex="-1">5 min »</button>
+  <button class="pbtn" id="bGoto" tabindex="-1">⏱ Aller à…</button>
   <button class="pbtn" id="bRefresh" tabindex="-1">⟳ Actualiser</button>
 </div>
 
@@ -101,6 +151,7 @@ var pauseIcon = document.getElementById("pauseIcon");
 var hls = null;
 var vod = null;
 var STORE = "kicktv_rediff_";
+var tUsed = false;
 
 /* ---------- formats ---------- */
 var JOURS = ["dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"];
@@ -158,6 +209,15 @@ function start(v) {
   var resume = 0;
   try { resume = +localStorage.getItem(STORE + uuid) || 0; } catch (e) {}
   if (resume < 60 || (dur && resume > dur - 60)) resume = 0;
+  // un moment précis dans l'adresse a la priorité : ?t=1:23:00 ou ?t=1h23m
+  var tp = tUsed ? "" : param("t");
+  if (tp) {
+    tUsed = true;
+    var hm = /^(?:(\d+)h)?(?:(\d+)m(?:in)?)?(?:(\d+)s?)?$/.exec(tp), parts = tp.split(":");
+    var asked = parts.length > 1 ? parts.reduce(function (a, b) { return a * 60 + (+b || 0); }, 0)
+              : hm ? (+hm[1] || 0) * 3600 + (+hm[2] || 0) * 60 + (+hm[3] || 0) : 0;
+    if (asked > 0 && (!dur || asked < dur)) resume = asked;
+  }
   vod.key = STORE + uuid;
 
   if (hls) { hls.destroy(); hls = null; }
@@ -235,10 +295,84 @@ function seekBy(sec) {
 }
 function togglePause() {
   if (vid.muted) { vid.muted = false; showToast("Son activé"); if (!vid.paused) return; }
-  if (vid.paused) { vid.play().catch(function () {}); pauseIcon.style.display = "none"; }
-  else { vid.pause(); pauseIcon.style.display = "block"; }
-  showInfo(vid.paused ? 600000 : 4000);
+  if (vid.paused) { resumePlay(); }
+  else {
+    vid.pause(); pauseIcon.style.display = "block";
+    document.body.classList.add("paused"); selectMenu(0);
+    showInfo(600000);
+  }
 }
+function resumePlay() {
+  vid.play().catch(function () {});
+  pauseIcon.style.display = "none";
+  document.body.classList.remove("paused");
+  showInfo(4000);
+}
+
+/* ---------- menu de pause : ▶ Reprendre / ⏱ Aller à ---------- */
+var menuSel = 0;
+function selectMenu(i) {
+  menuSel = i;
+  document.getElementById("mResume").className = "mbtn" + (i === 0 ? " sel" : "");
+  document.getElementById("mGoto").className = "mbtn" + (i === 1 ? " sel" : "");
+}
+function menuOk() { if (menuSel === 0) resumePlay(); else openGoto(); }
+
+/* ---------- fenêtre "Aller à" ---------- */
+var gotoEl = document.getElementById("goto");
+var gVals = [0, 0, 0], gField = 1, gTyped = "";
+function gotoOpen() { return gotoEl.classList.contains("on"); }
+function openGoto(firstDigit) {
+  var t = Math.floor(seekTarget !== null ? seekTarget : vid.currentTime || 0);
+  gVals = [Math.floor(t / 3600), Math.floor(t % 3600 / 60), t % 60];
+  gField = 1; gTyped = "";
+  document.getElementById("gSub").textContent = "Position actuelle : " + hms(t) + " · durée totale : " + hms(duration());
+  gotoEl.classList.add("on");
+  if (firstDigit !== undefined) typeDigit(firstDigit); else drawGoto();
+}
+function closeGoto() { gotoEl.classList.remove("on"); gTyped = ""; }
+function pad(n) { return (n < 10 ? "0" : "") + n; }
+function drawGoto() {
+  document.getElementById("g0").textContent = gVals[0];
+  document.getElementById("g1").textContent = pad(gVals[1]);
+  document.getElementById("g2").textContent = pad(gVals[2]);
+  var f = gotoEl.querySelectorAll(".field");
+  for (var i = 0; i < f.length; i++) f[i].className = "field" + (i === gField ? " sel" : "");
+}
+function maxHours() { return Math.max(0, Math.floor(duration() / 3600)); }
+function stepField(d) {
+  gTyped = "";
+  var lim = [maxHours() + 1, 60, 60][gField];
+  gVals[gField] = (gVals[gField] + d + lim) % lim;
+  drawGoto();
+}
+function typeDigit(n) {
+  // saisie façon micro-ondes : 1 2 3 0 0 → 1:23:00
+  gTyped = (gTyped + n).replace(/^0+/, "").slice(-6);
+  var s = ("000000" + gTyped).slice(-6);
+  var total = (+s.slice(0, 2)) * 3600 + (+s.slice(2, 4)) * 60 + (+s.slice(4, 6));
+  gVals = [Math.floor(total / 3600), Math.floor(total % 3600 / 60), total % 60];
+  drawGoto();
+}
+function confirmGoto() {
+  var t = gVals[0] * 3600 + gVals[1] * 60 + gVals[2];
+  var d = duration();
+  if (d && t > d - 5) t = Math.max(0, d - 5);
+  closeGoto();
+  clearTimeout(seekTimer); seekTarget = null;
+  vid.currentTime = t;
+  showToast("Direction " + hms(t));
+  if (vid.paused) resumePlay(); else showInfo(4000);
+}
+gotoEl.addEventListener("click", function (e) {
+  var arr = e.target.closest ? e.target.closest(".arr") : null;
+  var field = e.target.closest ? e.target.closest(".field") : null;
+  if (field) { gField = +field.getAttribute("data-i"); if (arr) stepField(+arr.getAttribute("data-d")); else drawGoto(); }
+});
+document.getElementById("gOk").addEventListener("click", confirmGoto);
+document.getElementById("gNo").addEventListener("click", closeGoto);
+document.getElementById("mResume").addEventListener("click", resumePlay);
+document.getElementById("mGoto").addEventListener("click", function () { openGoto(); });
 
 /* ---------- affichage ---------- */
 var infoTimer = null, btnTimer = null, toastTimer = null;
@@ -267,8 +401,36 @@ function goHome() {
   location.href = "../";
 }
 var BACK_KEYS = { 8: 1, 27: 1, 461: 1, 10009: 1, 166: 1 };
+function digitOf(k) {
+  if (k >= 48 && k <= 57) return k - 48;      // chiffres de la télécommande / du clavier
+  if (k >= 96 && k <= 105) return k - 96;     // pavé numérique
+  return -1;
+}
 document.addEventListener("keydown", function (e) {
   var k = e.keyCode || e.which;
+  var digit = digitOf(k);
+
+  // --- fenêtre "Aller à" ouverte ---
+  if (gotoOpen()) {
+    e.preventDefault();
+    if (digit >= 0) typeDigit(digit);
+    else if (k === 38) stepField(1);
+    else if (k === 40) stepField(-1);
+    else if (k === 37) { gField = Math.max(0, gField - 1); gTyped = ""; drawGoto(); }
+    else if (k === 39) { gField = Math.min(2, gField + 1); gTyped = ""; drawGoto(); }
+    else if (k === 13) confirmGoto();
+    else if (BACK_KEYS[k]) closeGoto();
+    return;
+  }
+  // --- ouverture directe : chiffre ou touche verte ---
+  if (digit >= 0) { e.preventDefault(); openGoto(digit); return; }
+  if (k === 404) { e.preventDefault(); openGoto(); return; }
+  // --- en pause : ◀ ▶ choisissent dans le menu, OK valide ---
+  if (vid.paused && document.body.classList.contains("paused")) {
+    if (k === 37 || k === 39) { e.preventDefault(); selectMenu(menuSel === 0 ? 1 : 0); showInfo(600000); return; }
+    if (k === 13) { e.preventDefault(); menuOk(); return; }
+  }
+
   if (BACK_KEYS[k]) { e.preventDefault(); goHome(); }
   else if (k === 37) { e.preventDefault(); seekBy(-30); }
   else if (k === 39) { e.preventDefault(); seekBy(30); }
@@ -277,8 +439,9 @@ document.addEventListener("keydown", function (e) {
   else if (k === 13 || k === 415 || k === 19 || k === 10252) { e.preventDefault(); togglePause(); }
   else if (k === 412) { e.preventDefault(); seekBy(-300); }          // touche retour rapide
   else if (k === 417) { e.preventDefault(); seekBy(300); }           // touche avance rapide
-  else if (k >= 403 && k <= 406) { e.preventDefault(); refresh(); }
+  else if (k === 403 || k === 405 || k === 406) { e.preventDefault(); refresh(); }
 });
+document.getElementById("bGoto").addEventListener("click", function () { openGoto(); showButtons(); });
 document.getElementById("shield").addEventListener("click", function () { togglePause(); showButtons(); });
 document.addEventListener("mousemove", function () { showButtons(); showInfo(3000); });
 document.getElementById("bHome").addEventListener("click", goHome);
