@@ -31,6 +31,10 @@
   .chan .av { background:#ffcc00; font-size:3.6vh; }
   .chan .name { color:#ffcc00; }
   .chan:focus, .chan:hover { border-color:#ffcc00; }
+  .rediff .av { font-size:2vh; letter-spacing:.05em; }
+  .rediff .name { color:#a970ff; }
+  .rediff:focus, .rediff:hover { border-color:#a970ff; }
+  .rsub { color:var(--mut); font-size:2.1vh; margin-top:.6vh; }
   body.edit .fav { border-color:#ff5a5a55; }
   body.edit .fav::after { content:"✕"; position:absolute; top:1.2vh; right:1.6vh;
     color:#ff5a5a; font-size:3.4vh; font-weight:900; }
@@ -119,6 +123,9 @@
    ============================================================ */
 var DEFAUT = ["loumani_officiel"];
 
+/* Streamers qui ont une tuile "Rediff" (le dernier live terminé, en rediffusion) */
+var REDIFFS = ["loumani_officiel"];
+
 var COLS = 4;
 var STORE = "kicktv_favoris";
 var grid = document.getElementById("grid");
@@ -167,6 +174,31 @@ function saveFavs() {
     : "";
 }
 
+/* ---------- date du dernier live (sous la tuile Rediff) ---------- */
+var replayCache = {};
+var JOURS = ["dim.", "lun.", "mar.", "mer.", "jeu.", "ven.", "sam."];
+var MOIS = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
+function lastReplayDate(name, el) {
+  function show(txt) { el.textContent = txt; }
+  if (replayCache[name]) return show(replayCache[name]);
+  try {
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "https://kick.com/api/v2/channels/" + name + "/videos");
+    xhr.onload = function () {
+      try {
+        var list = JSON.parse(xhr.responseText), v = null;
+        for (var i = 0; i < list.length; i++) { if (!list[i].is_live && list[i].source) { v = list[i]; break; } }
+        if (!v) return;
+        var p = String(v.start_time).split(/[- :T]/);          // heure UTC chez Kick
+        var d = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2], +p[3] || 0, +p[4] || 0));
+        replayCache[name] = "Live du " + JOURS[d.getDay()] + " " + d.getDate() + " " + MOIS[d.getMonth()];
+        show(replayCache[name]);
+      } catch (e) {}
+    };
+    xhr.send();
+  } catch (e) {}
+}
+
 /* ---------- affichage ---------- */
 function color(name) {
   var h = 0;
@@ -196,6 +228,16 @@ function render(focusIndex) {
     tile("fav", name.charAt(0).toUpperCase(), name, function () {
       if (editMode) { removeFav(name); } else { openLive(name); }
     }, color(name));
+  });
+  if (!editMode) REDIFFS.forEach(function (name) {
+    var t = tile("rediff", "REDIFF", "Rediff " + name.split("_")[0], function () {
+      location.href = "replay/?c=" + encodeURIComponent(name);
+    }, color(name));
+    var sub = document.createElement("div");
+    sub.className = "rsub";
+    sub.textContent = "Dernier live";
+    t.appendChild(sub);
+    lastReplayDate(name, sub);
   });
   if (!editMode) tile("chan", "TV", "Cartoon TV", function () { location.href = "cartoons/"; });
   if (!editMode) tile("tool", "+", "Ajouter", openDlg);
@@ -236,7 +278,7 @@ function removeFav(name) {
 }
 function toggleEdit() {
   editMode = !editMode;
-  render(editMode ? 0 : favs.length + 2);
+  render(editMode ? 0 : favs.length + REDIFFS.length + 2);
 }
 function openDlg() {
   dlg.classList.add("on");
@@ -245,7 +287,7 @@ function openDlg() {
 }
 function closeDlg() {
   dlg.classList.remove("on");
-  focusTile(favs.length + 1);
+  focusTile(favs.length + REDIFFS.length + 1);
 }
 function submitDlg() {
   var name = clean(inp.value);

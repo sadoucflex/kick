@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rediffusion Kick</title>
+<style>
+  :root { --g:#53fc18; --p:#a970ff; --txt:#fff; --mut:#b5b9bd; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html, body { height:100%; background:#000; color:var(--txt);
+    font-family: Arial, Helvetica, sans-serif; overflow:hidden; cursor:none; }
+  body.pointer { cursor:default; }
+
+  #vid { position:fixed; inset:0; width:100%; height:100%; background:#000; object-fit:contain; }
+  #shield { position:fixed; inset:0; z-index:1; }
+
+  /* Écran d'attente */
+  #wait { position:fixed; inset:0; z-index:0; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; text-align:center; padding:0 10vw; }
+  #wait .big { font-size:6vh; font-weight:900; letter-spacing:.04em; }
+  #wait .big b { color:var(--g); }
+  #wait .small { color:var(--mut); font-size:2.8vh; margin-top:2.5vh; line-height:1.4; }
+
+  /* Bandeau d'infos + barre de progression */
+  #info { position:fixed; left:4vw; right:4vw; bottom:5vh; z-index:3;
+    background:linear-gradient(0deg, rgba(0,0,0,.9), rgba(0,0,0,.6)); border-radius:1.2vh;
+    padding:2.4vh 2.4vw 2.6vh; transition:opacity .5s, transform .5s; }
+  #info.hide { opacity:0; transform:translateY(2vh); pointer-events:none; }
+  .lab { color:var(--g); font-size:2.1vh; font-weight:900; letter-spacing:.08em; text-transform:uppercase; }
+  .tit { font-size:4vh; font-weight:900; margin:.6vh 0 .4vh; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .sub { color:var(--mut); font-size:2.3vh; }
+  #track { position:relative; height:1vh; background:rgba(255,255,255,.2); border-radius:.5vh; margin-top:2vh; }
+  #fill { position:absolute; left:0; top:0; bottom:0; width:0; background:var(--g); border-radius:.5vh; }
+  #target { position:absolute; top:-1vh; width:.6vh; height:3vh; background:#fff; border-radius:.3vh; display:none; }
+  #times { display:flex; justify-content:space-between; color:var(--mut); font-size:2.3vh; margin-top:1.2vh; }
+  #times b { color:#fff; }
+  #help { color:var(--mut); font-size:2vh; margin-top:1.2vh; }
+
+  #btns { position:fixed; top:3.5vh; left:2.5vw; z-index:4; display:flex; gap:1vw; transition:opacity .4s; }
+  #btns.hide { opacity:0; pointer-events:none; }
+  .pbtn { background:rgba(0,0,0,.7); color:#fff; border:.4vh solid var(--g); border-radius:1.2vh;
+    font-size:2.5vh; padding:1.1vh 1.6vw; cursor:pointer; }
+
+  #toast { position:fixed; left:50%; top:12vh; transform:translateX(-50%); z-index:5;
+    background:rgba(0,0,0,.8); color:#fff; font-size:2.6vh; padding:1.4vh 2.4vw; border-radius:1.2vh;
+    white-space:nowrap; transition:opacity .4s; pointer-events:none; }
+  #toast.hide { opacity:0; }
+  #pauseIcon { position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); z-index:2; font-size:14vh;
+    color:#fff; text-shadow:0 0 2vh #000; display:none; pointer-events:none; }
+</style>
+</head>
+<body>
+
+<div id="wait">
+  <div class="big"><b>KICK</b> REDIFF</div>
+  <div class="small" id="waitTxt">Recherche de la dernière rediffusion…</div>
+</div>
+<video id="vid" playsinline></video>
+<div id="shield"></div>
+<div id="pauseIcon">❚❚</div>
+
+<div id="info" class="hide">
+  <div class="lab" id="iLab">Rediffusion</div>
+  <div class="tit" id="iTit"></div>
+  <div class="sub" id="iSub"></div>
+  <div id="track"><div id="fill"></div><div id="target"></div></div>
+  <div id="times"><span id="tCur"><b>0:00</b></span><span id="tDur">0:00</span></div>
+  <div id="help">OK : pause · ◀ ▶ : 30 s · ▲ ▼ : 5 min · Retour : Kick TV</div>
+</div>
+
+<div id="btns" class="hide">
+  <button class="pbtn" id="bHome" tabindex="-1">⌂ Kick TV</button>
+  <button class="pbtn" id="bBack5" tabindex="-1">« 5 min</button>
+  <button class="pbtn" id="bBack" tabindex="-1">‹ 30 s</button>
+  <button class="pbtn" id="bPlay" tabindex="-1">❚❚ / ▶</button>
+  <button class="pbtn" id="bFwd" tabindex="-1">30 s ›</button>
+  <button class="pbtn" id="bFwd5" tabindex="-1">5 min »</button>
+  <button class="pbtn" id="bRefresh" tabindex="-1">⟳ Actualiser</button>
+</div>
+
+<div id="toast" class="hide"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
+<script>
+/* ============================================================
+   REDIFFUSION : lit automatiquement le dernier live terminé d'une chaîne Kick.
+   Chaîne par défaut : loumani_officiel (ou ?c=pseudo dans l'adresse).
+   ============================================================ */
+function param(name) {
+  var m = new RegExp("[?&]" + name + "=([^&#]*)").exec(location.search);
+  return m ? decodeURIComponent(m[1]) : "";
+}
+var CHANNEL = (param("c") || "loumani_officiel").toLowerCase().replace(/[^a-z0-9_\-]/g, "");
+
+var vid = document.getElementById("vid");
+var info = document.getElementById("info");
+var btns = document.getElementById("btns");
+var toast = document.getElementById("toast");
+var waitTxt = document.getElementById("waitTxt");
+var pauseIcon = document.getElementById("pauseIcon");
+var hls = null;
+var vod = null;
+var STORE = "kicktv_rediff_";
+
+/* ---------- formats ---------- */
+var JOURS = ["dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"];
+var MOIS = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
+function kickDate(s) {               // les dates de Kick sont en heure UTC
+  var p = String(s || "").split(/[- :T]/);
+  return new Date(Date.UTC(+p[0], +p[1] - 1, +p[2], +p[3] || 0, +p[4] || 0, +p[5] || 0));
+}
+function frDate(d) {
+  var h = d.getHours(), m = d.getMinutes();
+  return JOURS[d.getDay()] + " " + d.getDate() + " " + MOIS[d.getMonth()] + " à " + h + "h" + (m < 10 ? "0" : "") + m;
+}
+function hms(s) {
+  s = Math.max(0, Math.floor(s || 0));
+  var h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+  return (h ? h + ":" + (m < 10 ? "0" : "") : "") + m + ":" + (sec < 10 ? "0" : "") + sec;
+}
+function human(s) {
+  s = Math.floor(s); var h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+  return h ? h + " h " + (m < 10 ? "0" : "") + m : m + " min";
+}
+
+/* ---------- chargement de la dernière rediffusion ---------- */
+function loadLatest() {
+  waitTxt.textContent = "Recherche de la dernière rediffusion de " + CHANNEL + "…";
+  var xhr = new XMLHttpRequest();
+  xhr.open("GET", "https://kick.com/api/v2/channels/" + CHANNEL + "/videos");
+  xhr.onload = function () {
+    var list = null;
+    try { list = JSON.parse(xhr.responseText); } catch (e) {}
+    if (xhr.status !== 200 || !list || !list.length) { return fail("Aucune rediffusion trouvée pour " + CHANNEL + "."); }
+    var latest = null;
+    for (var i = 0; i < list.length; i++) { if (!list[i].is_live && list[i].source) { latest = list[i]; break; } }
+    if (!latest) return fail("La rediffusion du dernier live n'est pas encore disponible.");
+    start(latest);
+  };
+  xhr.onerror = function () { fail("Impossible de joindre Kick."); };
+  xhr.send();
+}
+function fail(msg) {
+  waitTxt.textContent = msg + " Nouvel essai dans 30 secondes…";
+  setTimeout(loadLatest, 30000);
+}
+
+function start(v) {
+  vod = v;
+  var uuid = (v.video && v.video.uuid) || v.slug || String(v.id);
+  var startD = kickDate(v.start_time);
+  var dur = (v.duration || 0) / 1000;
+  document.getElementById("iTit").textContent = v.session_title || "Live de " + CHANNEL;
+  document.getElementById("iSub").textContent = CHANNEL + " · live du " + frDate(startD) + " · " + human(dur);
+  waitTxt.textContent = "Chargement de la rediffusion du " + frDate(startD) + "…";
+
+  // reprendre là où on s'était arrêté sur cette rediffusion
+  var resume = 0;
+  try { resume = +localStorage.getItem(STORE + uuid) || 0; } catch (e) {}
+  if (resume < 60 || (dur && resume > dur - 60)) resume = 0;
+  vod.key = STORE + uuid;
+
+  if (hls) { hls.destroy(); hls = null; }
+  if (window.Hls && Hls.isSupported()) {
+    hls = new Hls({ startPosition: resume || -1, maxBufferLength: 30, capLevelToPlayerSize: false });
+    hls.on(Hls.Events.ERROR, function (e, d) {
+      if (!d.fatal) return;
+      if (d.type === Hls.ErrorTypes.NETWORK_ERROR) { showToast("Connexion difficile, nouvel essai…"); setTimeout(function () { hls && hls.startLoad(); }, 3000); }
+      else if (d.type === Hls.ErrorTypes.MEDIA_ERROR) { hls.recoverMediaError(); }
+      else { showToast("Erreur de lecture, actualisation…"); setTimeout(refresh, 3000); }
+    });
+    hls.loadSource(v.source);
+    hls.attachMedia(vid);
+    hls.on(Hls.Events.MANIFEST_PARSED, function () { tryPlay(); });
+  } else if (vid.canPlayType("application/vnd.apple.mpegurl")) {
+    vid.src = v.source;               // lecture HLS native de la TV
+    vid.addEventListener("loadedmetadata", function once() {
+      vid.removeEventListener("loadedmetadata", once);
+      if (resume) vid.currentTime = resume;
+      tryPlay();
+    });
+  } else {
+    waitTxt.textContent = "Cette TV ne sait pas lire les rediffusions Kick.";
+    return;
+  }
+  if (resume) showToast("Reprise à " + human(resume) + " · ▲ ▼ pour avancer ou reculer de 5 min", 6000);
+  showInfo(8000);
+}
+function tryPlay() {
+  var p = vid.play();
+  if (p && p.catch) p.catch(function (err) {
+    if (err && err.name === "NotAllowedError") {
+      vid.muted = true; vid.play().catch(function () {});
+      showToast("Appuie sur OK pour activer le son", 6000);
+    }
+  });
+}
+function refresh() {
+  var t = vid.currentTime || 0;
+  if (vod && vod.key && t > 60) { try { localStorage.setItem(vod.key, Math.floor(t)); } catch (e) {} }
+  showToast("Actualisation…");
+  loadLatest();                         // si un nouveau live s'est terminé entre-temps, on passe dessus
+}
+
+/* ---------- position, sauvegarde ---------- */
+setInterval(function () {
+  if (vod && vod.key && !vid.paused && vid.currentTime > 60) {
+    try { localStorage.setItem(vod.key, Math.floor(vid.currentTime)); } catch (e) {}
+  }
+}, 10000);
+function duration() { return vid.duration && isFinite(vid.duration) ? vid.duration : (vod ? vod.duration / 1000 : 0); }
+function drawBar() {
+  var d = duration() || 1;
+  document.getElementById("fill").style.width = Math.min(100, vid.currentTime / d * 100) + "%";
+  document.getElementById("tCur").innerHTML = "<b>" + hms(seekTarget !== null ? seekTarget : vid.currentTime) + "</b>";
+  document.getElementById("tDur").textContent = hms(d);
+  var tg = document.getElementById("target");
+  if (seekTarget !== null) { tg.style.display = "block"; tg.style.left = Math.min(100, seekTarget / d * 100) + "%"; }
+  else tg.style.display = "none";
+}
+vid.addEventListener("timeupdate", drawBar);
+vid.addEventListener("ended", function () {
+  try { localStorage.removeItem(vod.key); } catch (e) {}
+  showToast("Fin de la rediffusion", 8000); showInfo(10000);
+});
+
+/* ---------- avance / retour rapide (les appuis s'additionnent) ---------- */
+var seekTarget = null, seekTimer = null;
+function seekBy(sec) {
+  var base = seekTarget !== null ? seekTarget : vid.currentTime;
+  seekTarget = Math.max(0, Math.min(duration() - 5, base + sec));
+  showInfo(4000); drawBar();
+  clearTimeout(seekTimer);
+  seekTimer = setTimeout(function () { vid.currentTime = seekTarget; seekTarget = null; drawBar(); }, 700);
+}
+function togglePause() {
+  if (vid.muted) { vid.muted = false; showToast("Son activé"); if (!vid.paused) return; }
+  if (vid.paused) { vid.play().catch(function () {}); pauseIcon.style.display = "none"; }
+  else { vid.pause(); pauseIcon.style.display = "block"; }
+  showInfo(vid.paused ? 600000 : 4000);
+}
+
+/* ---------- affichage ---------- */
+var infoTimer = null, btnTimer = null, toastTimer = null;
+function showInfo(ms) {
+  drawBar();
+  info.classList.remove("hide");
+  clearTimeout(infoTimer);
+  infoTimer = setTimeout(function () { if (!vid.paused) info.classList.add("hide"); }, ms || 4000);
+}
+function showButtons() {
+  document.body.classList.add("pointer");
+  btns.classList.remove("hide");
+  clearTimeout(btnTimer);
+  btnTimer = setTimeout(function () { btns.classList.add("hide"); document.body.classList.remove("pointer"); }, 5000);
+}
+function showToast(text, ms) {
+  toast.textContent = text; toast.classList.remove("hide");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { toast.classList.add("hide"); }, ms || 2500);
+}
+vid.addEventListener("playing", function () { document.getElementById("wait").style.display = "none"; pauseIcon.style.display = "none"; });
+
+/* ---------- télécommande et curseur ---------- */
+function goHome() {
+  if (vod && vod.key && vid.currentTime > 60) { try { localStorage.setItem(vod.key, Math.floor(vid.currentTime)); } catch (e) {} }
+  location.href = "../";
+}
+var BACK_KEYS = { 8: 1, 27: 1, 461: 1, 10009: 1, 166: 1 };
+document.addEventListener("keydown", function (e) {
+  var k = e.keyCode || e.which;
+  if (BACK_KEYS[k]) { e.preventDefault(); goHome(); }
+  else if (k === 37) { e.preventDefault(); seekBy(-30); }
+  else if (k === 39) { e.preventDefault(); seekBy(30); }
+  else if (k === 40) { e.preventDefault(); seekBy(-300); }
+  else if (k === 38) { e.preventDefault(); seekBy(300); }
+  else if (k === 13 || k === 415 || k === 19 || k === 10252) { e.preventDefault(); togglePause(); }
+  else if (k === 412) { e.preventDefault(); seekBy(-300); }          // touche retour rapide
+  else if (k === 417) { e.preventDefault(); seekBy(300); }           // touche avance rapide
+  else if (k >= 403 && k <= 406) { e.preventDefault(); refresh(); }
+});
+document.getElementById("shield").addEventListener("click", function () { togglePause(); showButtons(); });
+document.addEventListener("mousemove", function () { showButtons(); showInfo(3000); });
+document.getElementById("bHome").addEventListener("click", goHome);
+document.getElementById("bBack5").addEventListener("click", function () { seekBy(-300); showButtons(); });
+document.getElementById("bBack").addEventListener("click", function () { seekBy(-30); showButtons(); });
+document.getElementById("bPlay").addEventListener("click", function () { togglePause(); showButtons(); });
+document.getElementById("bFwd").addEventListener("click", function () { seekBy(30); showButtons(); });
+document.getElementById("bFwd5").addEventListener("click", function () { seekBy(300); showButtons(); });
+document.getElementById("bRefresh").addEventListener("click", function () { refresh(); showButtons(); });
+
+loadLatest();
+</script>
+</body>
+</html>
