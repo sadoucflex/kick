@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Écran PC → TV</title>
+<style>
+  :root { --b:#3ea6ff; --g:#53fc18; --bg:#0b0e0f; --card:#1a1d21; --line:#2a2e33; --txt:#fff; --mut:#9aa0a6; --red:#ff6b6b; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--txt); font:16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    min-height:100vh; display:flex; justify-content:center; padding:48px 20px; }
+  main { width:100%; max-width:640px; }
+  h1 { font-size:28px; font-weight:900; letter-spacing:.02em; margin-bottom:6px; }
+  h1 b { color:var(--b); }
+  .sub { color:var(--mut); margin-bottom:28px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:24px; margin-bottom:16px; }
+  label { display:block; font-weight:700; margin-bottom:8px; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+  #code { font:900 30px/1 "Courier New", Courier, monospace; letter-spacing:.18em; width:220px; padding:12px 14px;
+    background:#0f1113; color:#fff; border:2px solid var(--line); border-radius:10px; outline:none; }
+  #code:focus { border-color:var(--b); }
+  select { font:inherit; padding:12px; background:#0f1113; color:#fff; border:2px solid var(--line); border-radius:10px; }
+  button { font:inherit; font-weight:700; padding:12px 18px; border-radius:10px; border:2px solid transparent; cursor:pointer; }
+  .primary { background:var(--b); color:#001321; }
+  .primary:hover { filter:brightness(1.1); }
+  .ghost { background:#2a2e33; color:#fff; }
+  .ghost:hover { border-color:#fff; }
+  .danger { background:transparent; color:var(--red); border-color:var(--red); }
+  button[hidden] { display:none; }
+  #status { margin-top:16px; color:var(--mut); min-height:24px; }
+  #status.ok { color:var(--g); }
+  #status.err { color:var(--red); }
+  #preview { display:none; width:100%; margin-top:16px; border-radius:10px; background:#000; border:1px solid var(--line); }
+  #preview.on { display:block; }
+  .tips { color:var(--mut); font-size:14px; }
+  .tips li { margin:6px 0 6px 18px; }
+  .tips b { color:#fff; }
+</style>
+</head>
+<body>
+<main>
+  <h1><b>ÉCRAN PC</b> → TV</h1>
+  <p class="sub">Affiche une fenêtre de ce PC (Claude, par exemple) sur la TV, et continue à travailler ici.</p>
+
+  <div class="card">
+    <label for="code">Code affiché sur la TV</label>
+    <div class="row">
+      <input id="code" inputmode="numeric" maxlength="7" autocomplete="off" placeholder="000000">
+      <select id="qual" title="Qualité">
+        <option value="text">Texte net (Claude, documents)</option>
+        <option value="motion">Fluide (vidéo, animations)</option>
+      </select>
+    </div>
+    <div class="row" style="margin-top:16px">
+      <button class="primary" id="shareBtn">Partager une fenêtre sur la TV</button>
+      <button class="ghost" id="switchBtn" hidden>Changer de fenêtre</button>
+      <button class="danger" id="stopBtn" hidden>Arrêter</button>
+    </div>
+    <div id="status">Sur la TV : Kick TV → tuile « Écran PC » pour afficher le code.</div>
+    <video id="preview" autoplay muted playsinline></video>
+  </div>
+
+  <div class="card tips">
+    <ul>
+      <li>Dans la fenêtre de choix, prends l'onglet <b>Fenêtre</b>, puis la fenêtre <b>Claude</b> (l'appli ou un onglet claude.ai dans sa propre fenêtre).</li>
+      <li>Ensuite, mets ta fenêtre de travail par-dessus : la TV continue d'afficher Claude. Ne <b>réduis</b> pas la fenêtre Claude (bouton —), sinon l'image se fige.</li>
+      <li>Pour que Claude remplisse toute la TV, agrandis sa fenêtre en plein écran avant de la partager.</li>
+      <li>Laisse cet onglet ouvert, même en arrière-plan. Si la TV se rallume ou recharge la page, la connexion repart toute seule.</li>
+      <li>Mets cette page en favori : le code est retenu.</li>
+    </ul>
+  </div>
+</main>
+
+<script src="../ecran/peerjs.min.js"></script>
+<script>
+const PREFIX = "kicktv-ecran-";
+const CODE_STORE = "kicktv_ecran_code_pc";
+const QUAL = {
+  text:   { w: 1920, h: 1080, fps: 15, hint: "text",   br: 6000000 },
+  motion: { w: 1280, h: 720,  fps: 30, hint: "motion", br: 4000000 },
+};
+const $ = (id) => document.getElementById(id);
+const codeInp = $("code"), qualSel = $("qual"), statusEl = $("status"), preview = $("preview");
+const shareBtn = $("shareBtn"), switchBtn = $("switchBtn"), stopBtn = $("stopBtn");
+
+let peer = null, call = null, stream = null, wanted = false, retryTimer = null;
+
+const param = (n) => new URLSearchParams(location.search).get(n) || "";
+const setStatus = (t, cls = "") => { statusEl.textContent = t; statusEl.className = cls; };
+const digits = () => codeInp.value.replace(/\D/g, "");
+
+codeInp.value = (param("c") || localStorage.getItem(CODE_STORE) || "").replace(/\D/g, "").slice(0, 6);
+qualSel.value = localStorage.getItem("kicktv_ecran_qual") || "text";
+qualSel.onchange = () => localStorage.setItem("kicktv_ecran_qual", qualSel.value);
+
+if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+  setStatus("Ce navigateur ne sait pas partager une fenêtre. Ouvre cette page dans Chrome ou Edge sur ordinateur.", "err");
+  shareBtn.disabled = true;
+}
+
+function serverOpts() {
+  const o = { debug: 1 };
+  const s = param("srv");                 // pour les tests : ?srv=localhost:9000
+  if (s) { const [h, p] = s.split(":"); Object.assign(o, { host: h, port: +p || 9000, path: "/", secure: false }); }
+  return o;
+}
+
+/* ---------- capture d'une fenêtre ---------- */
+async function capture() {
+  const q = QUAL[qualSel.value];
+  const s = await navigator.mediaDevices.getDisplayMedia({
+    video: { width: { max: q.w }, height: { max: q.h }, frameRate: { ideal: q.fps, max: q.fps } },
+    audio: false,
+    selfBrowserSurface: "exclude",
+    surfaceSwitching: "include",
+  });
+  const t = s.getVideoTracks()[0];
+  try { t.contentHint = q.hint; } catch (e) {}
+  t.addEventListener("ended", () => stop("Partage arrêté depuis le navigateur."));
+  preview.srcObject = s;
+  preview.classList.add("on");
+  return s;
+}
+
+/* ---------- connexion à la TV ---------- */
+function ensurePeer() {
+  return new Promise((resolve, reject) => {
+    if (peer && peer.open) return resolve(peer);
+    if (peer) { try { peer.destroy(); } catch (e) {} }
+    peer = new Peer(serverOpts());
+    peer.on("open", () => resolve(peer));
+    peer.on("disconnected", () => { if (!peer.destroyed) try { peer.reconnect(); } catch (e) {} });
+    peer.on("error", (err) => {
+      if (err.type === "peer-unavailable") {
+        if (wanted) { setStatus("La TV ne répond pas : ouvre « Écran PC » sur la TV et vérifie le code. Nouvel essai…", "err"); retrySoon(); }
+        return;
+      }
+      setStatus("Serveur injoignable (" + err.type + "). Nouvel essai…", "err");
+      try { peer.destroy(); } catch (e) {}
+      peer = null;
+      reject(err);
+      if (wanted) retrySoon();
+    });
+  });
+}
+function retrySoon(ms = 3000) {
+  clearTimeout(retryTimer);
+  retryTimer = setTimeout(connect, ms);
+}
+async function connect() {
+  clearTimeout(retryTimer);
+  if (!wanted || !stream) return;
+  try { await ensurePeer(); } catch (e) { return; }
+  if (!wanted || !stream) return;
+  if (call) { const old = call; call = null; try { old.close(); } catch (e) {} }
+
+  setStatus("Connexion à la TV…");
+  const c = peer.call(PREFIX + digits(), stream);
+  if (!c) return retrySoon();
+  call = c;
+  const pc = c.peerConnection;
+  if (pc) pc.addEventListener("connectionstatechange", () => {
+    if (call !== c) return;
+    if (pc.connectionState === "connected") { setStatus("✅ Affiché sur la TV. Tu peux travailler sur une autre fenêtre.", "ok"); tune(pc); }
+    if (pc.connectionState === "failed") { setStatus("Connexion perdue, nouvel essai…", "err"); retrySoon(); }
+  });
+  c.on("close", () => { if (call === c && wanted) { call = null; setStatus("La TV s'est déconnectée, nouvel essai…", "err"); retrySoon(); } });
+  c.on("error", () => { if (call === c && wanted) { call = null; retrySoon(); } });
+}
+function tune(pc) {                       // débit généreux : on est sur le réseau de la maison
+  const q = QUAL[qualSel.value];
+  for (const s of pc.getSenders()) {
+    if (!s.track || s.track.kind !== "video") continue;
+    const p = s.getParameters();
+    if (!p.encodings || !p.encodings.length) continue;
+    p.encodings[0].maxBitrate = q.br;
+    s.setParameters(p).catch(() => {});
+  }
+}
+
+/* ---------- boutons ---------- */
+async function share() {
+  const code = digits();
+  if (code.length !== 6) { setStatus("Tape les 6 chiffres affichés sur la TV.", "err"); codeInp.focus(); return; }
+  localStorage.setItem(CODE_STORE, code);
+  history.replaceState(null, "", "?c=" + code + (param("srv") ? "&srv=" + param("srv") : ""));
+  try { stream = await capture(); }
+  catch (e) { setStatus("Partage annulé.", ""); return; }
+  wanted = true;
+  shareBtn.hidden = true; switchBtn.hidden = false; stopBtn.hidden = false;
+  codeInp.disabled = true; qualSel.disabled = true;
+  connect();
+}
+async function switchWindow() {
+  let ns;
+  try { ns = await capture(); } catch (e) { preview.srcObject = stream; return; }
+  const old = stream;
+  stream = ns;
+  const sender = call && call.peerConnection && call.peerConnection.getSenders().find((s) => !s.track || s.track.kind === "video");
+  if (sender) { try { await sender.replaceTrack(ns.getVideoTracks()[0]); } catch (e) { connect(); } }
+  else connect();
+  old.getTracks().forEach((t) => t.stop());
+  setStatus("✅ Nouvelle fenêtre affichée sur la TV.", "ok");
+}
+function stop(msg = "Partage arrêté.") {
+  wanted = false;
+  clearTimeout(retryTimer);
+  if (call) { const c = call; call = null; try { c.close(); } catch (e) {} }
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  stream = null;
+  preview.srcObject = null; preview.classList.remove("on");
+  shareBtn.hidden = false; switchBtn.hidden = true; stopBtn.hidden = true;
+  codeInp.disabled = false; qualSel.disabled = false;
+  setStatus(msg);
+}
+
+shareBtn.onclick = share;
+switchBtn.onclick = switchWindow;
+stopBtn.onclick = () => stop();
+codeInp.addEventListener("keydown", (e) => { if (e.key === "Enter") share(); });
+window.addEventListener("beforeunload", () => { try { if (call) call.close(); if (peer) peer.destroy(); } catch (e) {} });
+</script>
+</body>
+</html>

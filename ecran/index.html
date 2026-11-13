@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Écran PC – Kick TV</title>
+<style>
+  :root { --b:#3ea6ff; --g:#53fc18; --bg:#0b0e0f; --card:#1a1d21; --txt:#fff; --mut:#9aa0a6; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html, body { height:100%; background:var(--bg); color:var(--txt);
+    font-family: Arial, Helvetica, sans-serif; overflow:hidden; }
+
+  /* Écran d'attente : le code à taper sur le PC */
+  #wait { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; text-align:center; padding:0 6vw; }
+  .logo { font-size:5vh; font-weight:900; letter-spacing:.04em; margin-bottom:4vh; }
+  .logo b { color:var(--b); }
+  .lab { color:var(--mut); font-size:2.8vh; }
+  #code { font-family:"Courier New", Courier, monospace; font-size:15vh; font-weight:900;
+    letter-spacing:.1em; color:var(--b); margin:1vh 0 4vh; }
+  .steps { background:var(--card); border-radius:2vh; padding:3vh 3vw; font-size:3vh;
+    line-height:1.75; text-align:left; }
+  .steps b { color:var(--b); }
+  .steps .url { color:#fff; font-weight:900; }
+  #status { margin-top:4vh; font-size:2.7vh; color:var(--mut); min-height:3.5vh; }
+  #status.ok { color:var(--g); }
+  #status.err { color:#ff6b6b; }
+  .foot { position:fixed; left:0; right:0; bottom:3vh; text-align:center; color:var(--mut); font-size:2.2vh; }
+
+  /* Image du PC */
+  #screen { position:fixed; inset:0; background:#000; display:none; overflow:hidden; z-index:10; }
+  #screen.on { display:block; }
+  #vid { position:absolute; left:0; top:0; width:100%; height:100%; background:#000; object-fit:fill; }
+  #shield { position:absolute; inset:0; z-index:1; background:transparent; }
+  #bar { position:absolute; top:3vh; left:2.5vw; z-index:2; display:flex; gap:1.2vw; transition:opacity .4s; }
+  #bar.hide { opacity:0; pointer-events:none; }
+  .pbtn { background:rgba(0,0,0,.7); color:#fff; border:.4vh solid var(--b); border-radius:1.2vh;
+    font-size:2.6vh; padding:1.2vh 2vw; cursor:pointer; }
+  #toast { position:absolute; left:50%; bottom:6vh; transform:translateX(-50%); z-index:3;
+    background:rgba(0,0,0,.8); color:#fff; font-size:2.6vh; padding:1.4vh 2.4vw;
+    border-radius:1.2vh; white-space:nowrap; transition:opacity .4s; pointer-events:none; }
+  #toast.hide { opacity:0; }
+</style>
+</head>
+<body>
+
+<div id="wait">
+  <div class="logo"><b>ÉCRAN</b> PC</div>
+  <div class="lab">Code à taper sur ton PC</div>
+  <div id="code">······</div>
+  <div class="steps">
+    1. Sur ton PC, dans Chrome ou Edge, ouvre <span class="url" id="pcUrl"></span><br>
+    2. Tape ce code, puis clique <b>Partager une fenêtre</b><br>
+    3. Choisis l'onglet <b>Fenêtre</b>, puis la fenêtre <b>Claude</b>
+  </div>
+  <div id="status">Démarrage…</div>
+</div>
+<div class="foot">Retour : revenir à Kick TV · Touche de couleur : relancer</div>
+
+<div id="screen">
+  <video id="vid" autoplay playsinline muted></video>
+  <div id="shield"></div>
+  <div id="bar" class="hide">
+    <button class="pbtn" id="backBtn" tabindex="-1">◀ Retour</button>
+    <button class="pbtn" id="zoomBtn" tabindex="-1">🔍 Zoom</button>
+  </div>
+  <div id="toast" class="hide"></div>
+</div>
+
+<script src="peerjs.min.js"></script>
+<script>
+/* ============================================================
+   ÉCRAN PC : la TV affiche en direct une fenêtre du PC (ex. Claude).
+   Le PC ouvre la page /pc, tape le code affiché ici et partage une
+   fenêtre. L'image passe en direct par WebRTC (réseau local en
+   priorité) ; le serveur public PeerJS sert juste à se trouver.
+   ============================================================ */
+var PREFIX = "kicktv-ecran-";
+var CODE_STORE = "kicktv_ecran_code";
+var ZOOMS = [1, 1.5, 2];
+var HELP = "OK : zoom · flèches : se déplacer · Retour : quitter";
+var BACK_KEYS = { 8: 1, 27: 1, 461: 1, 10009: 1, 166: 1 };
+var FATAL = { "browser-incompatible": 1, "invalid-id": 1, "invalid-key": 1, "network": 1,
+  "ssl-unavailable": 1, "server-error": 1, "socket-error": 1, "socket-closed": 1, "unavailable-id": 1 };
+
+var waitEl = document.getElementById("wait");
+var screenEl = document.getElementById("screen");
+var vid = document.getElementById("vid");
+var statusEl = document.getElementById("status");
+var bar = document.getElementById("bar");
+var toastEl = document.getElementById("toast");
+
+var peer = null, call = null, retryTimer = null, barTimer = null, toastTimer = null;
+var zi = 0, px = 0.5, py = 0.5, showing = false;
+
+function param(name) {
+  var m = new RegExp("[?&]" + name + "=([^&#]*)").exec(location.search);
+  return m ? decodeURIComponent(m[1].replace(/\+/g, " ")) : "";
+}
+function setStatus(text, cls) { statusEl.textContent = text; statusEl.className = cls || ""; }
+
+/* ---------- code (gardé d'une fois sur l'autre pour que le PC s'en souvienne) ---------- */
+var code = "";
+try { code = localStorage.getItem(CODE_STORE) || ""; } catch (e) {}
+if (!/^\d{6}$/.test(code)) {
+  code = String(Math.floor(100000 + Math.random() * 900000));
+  try { localStorage.setItem(CODE_STORE, code); } catch (e) {}
+}
+document.getElementById("code").textContent = code.slice(0, 3) + " " + code.slice(3);
+document.getElementById("pcUrl").textContent =
+  location.host + location.pathname.replace(/ecran\/(index\.html)?$/, "") + "pc";
+
+/* ---------- connexion ---------- */
+function serverOpts() {
+  var o = { debug: 1 };
+  var s = param("srv");                  // pour les tests : ?srv=localhost:9000
+  if (s) { var p = s.split(":"); o.host = p[0]; o.port = +p[1] || 9000; o.path = "/"; o.secure = false; }
+  return o;
+}
+function start() {
+  clearTimeout(retryTimer);
+  if (!window.RTCPeerConnection && !window.webkitRTCPeerConnection) {
+    setStatus("Le navigateur de cette TV ne gère pas l'image en direct (WebRTC).", "err");
+    return;
+  }
+  if (typeof Peer === "undefined") {
+    setStatus("Module de connexion introuvable. Vérifie Internet, nouvel essai dans 5 s…", "err");
+    retryTimer = setTimeout(function () { location.reload(); }, 5000);
+    return;
+  }
+  setStatus("Connexion au serveur…");
+  try { peer = new Peer(PREFIX + code, serverOpts()); }
+  catch (e) { setStatus("Erreur de démarrage, nouvel essai dans 5 s…", "err"); return retry(); }
+
+  peer.on("open", function () { if (!showing) setStatus("Prêt : en attente du PC…", "ok"); });
+  peer.on("call", onCall);
+  peer.on("disconnected", function () {
+    if (peer && !peer.destroyed) { try { peer.reconnect(); } catch (e) { retry(); } }
+  });
+  peer.on("error", function (err) {
+    var t = err && err.type;
+    if (t === "browser-incompatible") { setStatus("Le navigateur de cette TV ne gère pas l'image en direct (WebRTC).", "err"); return; }
+    if (!FATAL[t]) return;               // erreur liée à un appel : gérée par l'appel lui-même
+    if (!showing) setStatus(t === "unavailable-id"
+      ? "Code encore occupé par la session précédente, nouvel essai dans 5 s…"
+      : "Serveur injoignable, nouvel essai dans 5 s…", "err");
+    retry();
+  });
+}
+function retry() {
+  clearTimeout(retryTimer);
+  retryTimer = setTimeout(function () {
+    try { if (peer) peer.destroy(); } catch (e) {}
+    peer = null;
+    start();
+  }, 5000);
+}
+
+function onCall(c) {
+  if (call && call !== c) { try { call.close(); } catch (e) {} }
+  call = c;
+  c.on("stream", function (s) { if (call === c) show(s); });
+  c.on("close", function () { if (call === c) { call = null; hide("Le PC a arrêté le partage."); } });
+  c.on("error", function () { if (call === c) { call = null; hide("Connexion avec le PC coupée."); } });
+  setStatus("Le PC se connecte…", "ok");
+  c.answer();                            // la TV ne fait que recevoir
+  var pc = c.peerConnection;
+  if (pc) pc.addEventListener("iceconnectionstatechange", function () {
+    if (call === c && (pc.iceConnectionState === "failed" || pc.iceConnectionState === "closed")) {
+      call = null; try { c.close(); } catch (e) {}
+      hide("Connexion avec le PC coupée.");
+    }
+  });
+}
+
+/* ---------- affichage ---------- */
+function show(stream) {
+  if ("srcObject" in vid) vid.srcObject = stream;
+  else vid.src = URL.createObjectURL(stream);
+  vid.muted = true;
+  var p = vid.play();
+  if (p && p.catch) p.catch(function () {});
+  showing = true;
+  zi = 0; px = 0.5; py = 0.5;
+  screenEl.classList.add("on");
+  layout();
+  showBar();
+  toast(HELP, 5000);
+}
+function hide(msg) {
+  showing = false;
+  screenEl.classList.remove("on");
+  try { vid.pause(); vid.srcObject = null; } catch (e) {}
+  vid.removeAttribute("src");
+  setStatus(msg + " En attente du PC…", "");
+}
+function layout() {
+  var W = window.innerWidth, H = window.innerHeight;
+  var vw = vid.videoWidth || 16, vh = vid.videoHeight || 9;
+  var s = Math.min(W / vw, H / vh) * ZOOMS[zi];
+  var w = vw * s, h = vh * s;
+  var left = w > W ? -(w - W) * px : (W - w) / 2;
+  var top = h > H ? -(h - H) * py : (H - h) / 2;
+  vid.style.width = Math.round(w) + "px";
+  vid.style.height = Math.round(h) + "px";
+  vid.style.left = Math.round(left) + "px";
+  vid.style.top = Math.round(top) + "px";
+}
+vid.addEventListener("loadedmetadata", layout);
+vid.addEventListener("resize", layout);   // la fenêtre du PC a changé de taille
+window.addEventListener("resize", layout);
+
+function zoom() {
+  zi = (zi + 1) % ZOOMS.length;
+  if (zi === 0) { px = 0.5; py = 0.5; }
+  layout();
+  toast(zi === 0 ? "Taille normale" : "Zoom ×" + String(ZOOMS[zi]).replace(".", ",") + " · flèches pour se déplacer");
+}
+function pan(k) {
+  if (zi === 0) { toast(HELP); return; }
+  var step = 0.2;
+  if (k === 37) px = Math.max(0, px - step);
+  if (k === 39) px = Math.min(1, px + step);
+  if (k === 38) py = Math.max(0, py - step);
+  if (k === 40) py = Math.min(1, py + step);
+  layout();
+}
+function showBar() {
+  bar.classList.remove("hide");
+  clearTimeout(barTimer);
+  barTimer = setTimeout(function () { bar.classList.add("hide"); }, 5000);
+}
+function toast(text, ms) {
+  toastEl.textContent = text;
+  toastEl.classList.remove("hide");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { toastEl.classList.add("hide"); }, ms || 2500);
+}
+function goHome() {
+  try { if (call) call.close(); } catch (e) {}
+  try { if (peer) peer.destroy(); } catch (e) {}
+  location.href = "../";
+}
+
+/* ---------- télécommande et curseur ---------- */
+document.addEventListener("keydown", function (e) {
+  var k = e.keyCode || e.which;
+  if (BACK_KEYS[k]) { e.preventDefault(); goHome(); return; }
+  if (k >= 403 && k <= 406) { e.preventDefault(); location.reload(); return; }
+  if (!showing) return;
+  if (k === 13) { e.preventDefault(); zoom(); }
+  else if (k >= 37 && k <= 40) { e.preventDefault(); pan(k); }
+  showBar();
+});
+document.getElementById("shield").addEventListener("click", function () { showBar(); toast(HELP); });
+document.getElementById("backBtn").addEventListener("click", goHome);
+document.getElementById("zoomBtn").addEventListener("click", function () { zoom(); showBar(); });
+screenEl.addEventListener("mousemove", showBar);
+window.addEventListener("beforeunload", function () { try { if (peer) peer.destroy(); } catch (e) {} });
+
+start();
+</script>
+</body>
+</html>
